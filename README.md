@@ -12,6 +12,9 @@ SmatterWaveMap (Java Edition) is a **real-time RF–audio forensic analysis engi
 The project is built for **researchers, engineers, and signal-processing experts**, offering a smooth Java API, a CLI, and optional JavaFX visualizations.
 
 ---
+## 🖼️ Screenshot
+![SmatterWaveMap](https://smatter.app/smatterwavemap.png)
+## Live Demo: Coming soon..
 
 ## 🚀 Features
 
