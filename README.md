@@ -13,7 +13,7 @@ The project is built for **researchers, engineers, and signal-processing experts
 
 ---
 ## 🖼️ Screenshot
-![SmatterWaveMap](https://smatter.app/smatterwavemapv2.png)
+![SmatterWaveMap](https://smatter.app/smatterwavemapv3.png)
 
 ## 🚀 Features
 
