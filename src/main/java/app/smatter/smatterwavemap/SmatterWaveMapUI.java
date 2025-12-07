@@ -17,6 +17,7 @@ import java.awt.event.ComponentEvent;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -46,6 +47,7 @@ import org.jfree.data.xy.XYSeries;
 import app.smatter.smatterwavemap.FFTFactory.JavaFFT;
 import app.smatter.smatterwavemap.SmatterWaveMap.ColorScheme;
 import jspectrumanalyzer.capture.ScreenCapture;
+import jspectrumanalyzer.core.DatasetSpectrum;
 import jspectrumanalyzer.core.DatasetSpectrumPeak;
 import jspectrumanalyzer.core.FFTBins;
 import jspectrumanalyzer.core.FrequencyAllocationTable;
@@ -96,7 +98,7 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 	private float									alphaPersistentDisplayImage			= 1.0f;
 	private JFreeChart								chart;
 	private ModelValue<Rectangle2D>					chartDataArea						= new ModelValue<Rectangle2D>("Chart data area", new Rectangle2D.Double(0, 0, 1, 1));
-	private XYSeriesCollectionImmutable				chartDataset								= new XYSeriesCollectionImmutable();
+	private XYSeriesCollectionImmutable				chartDataset					    = new XYSeriesCollectionImmutable();
 	private XYLineAndShapeRenderer					chartLineRenderer;
 	private ChartPanel								chartPanel;
 	private ColorScheme								colors								= new ColorScheme();
@@ -145,9 +147,12 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 	private JLabel labelMessages;
 	private RuntimePerformanceWatch					perfWatch							= new RuntimePerformanceWatch();
 	private static final float NORMALIZATION_FACTOR_2_BYTES = Short.MAX_VALUE + 1.0f;
-	static String percentMatchCount="0";
+	static String percentMatchCount="0%";
 	static JLabel percentMatch; 
 	public static double updatedPCount=0;
+    public static DatasetSpectrum ds;
+    public static AudioPlayerFull a;
+    public static DatasetSpectrum uData;
 	/**
 	 * @wbp.nonvisual location=-20,-21
 	 */
@@ -159,6 +164,15 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 	
 	public static void main(String[] args) {
 		SmatterWaveMapUI window = new SmatterWaveMapUI();
+
+        Timer timer = new Timer();
+        timer.scheduleAtFixedRate(new TimerTask() {
+            @Override
+            public void run() {
+            	window.updateTime();
+            }
+        }, 0, 6000);  
+		window.SWU();
 		EventQueue.invokeLater(new Runnable() {
 			public void run() {
 				try {
@@ -168,30 +182,142 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 				}
 			}
 		});
-        Timer timer = new Timer();
-        timer.scheduleAtFixedRate(new TimerTask() {
-            @Override
-            public void run() {
-            	window.updateTime();
-            }
-        }, 0, 1000);  
-		window.SWU();
 	}
 
     public void updateTime() {
-
+    	Thread asyncThread = new Thread(new MyRunnable());
+        asyncThread.start(); 
     	SwingUtilities.invokeLater(new Runnable() {
     	    public void run() {
-    	    	percentMatchCount = updatedPCount+ "%";
-    	    	percentMatch.setForeground(Color.GREEN);
+    	    	percentMatchCount = updatedPCount+"%";
+    	    	//percentMatch.setForeground(Color.GREEN);
     	    	percentMatch.setText(percentMatchCount);
     	    	percentMatch.setVisible(true);
     	    }
     	});
-    	
-        
     }
- 
+
+	class MyRunnable implements Runnable {
+	    @Override
+	    public void run() {
+	    	SmatterWaveMapUI S=new SmatterWaveMapUI();
+	    	if(uData.spectrumCFinal!=null) {	
+	    		//S.updatedPCount = matchPattern(uData.spectrumCFinal, ds.spectrumC);
+	    		S.updatedPCount = matchPatternFinal (uData.spectrumCFinal, ds.spectrumC);
+	    	}
+	    	
+	    }
+	}
+	/**
+     * Core matcher:
+     * Slides audio pattern over RF wave
+     */
+    public static double matchPatternFinal(float[] big, float[] small) {
+
+        int N = big.length;
+        int M = small.length;
+
+        if (M < 2 || N < M) return 0;
+
+        // Compute derivative / shape signature
+        float[] smallRatio = computeRatios(normalize(small));
+
+        double best = 0;
+
+        for (int start = 0; start <= N - M; start++) {
+
+            float[] window = Arrays.copyOfRange(big, start, start + M);
+            window = normalize(window);
+
+            float[] winRatio = computeRatios(window);
+
+            double score = compareRatios(winRatio, smallRatio);
+
+            best = Math.max(best, score);
+        }
+
+        return best;
+    }
+
+    // Normalization ensures shape match not amplitude
+    private static float[] normalize(float[] arr) {
+        float max = Float.NEGATIVE_INFINITY;
+        float min = Float.POSITIVE_INFINITY;
+
+        for (float v : arr) {
+            max = Math.max(max, v);
+            min = Math.min(min, v);
+        }
+
+        float range = max - min;
+        if (range == 0) return arr.clone();
+
+        float[] out = new float[arr.length];
+        for (int i = 0; i < arr.length; i++) {
+            out[i] = (arr[i] - min) / range;
+        }
+        return out;
+    }
+
+    // Derivative ratio series — shape fingerprint
+    private static float[] computeRatios(float[] arr) {
+        float[] r = new float[arr.length - 1];
+        for (int i = 0; i < r.length; i++) {
+            float a = arr[i];
+            float b = arr[i + 1];
+            if (a == 0) a = 0.00001f;
+            r[i] = b / a;
+        }
+        return r;
+    }
+
+    // Similarity measure — how parallel the transition curves are
+    private static double compareRatios(float[] a, float[] b) {
+        double score = 0;
+        for (int i = 0; i < a.length; i++) {
+            double diff = Math.abs(a[i] - b[i]);
+            score += 1.0 / (1.0 + diff);
+        }
+        return (score / a.length) * 100.0;
+    }
+	private static double strictCorr(float[] a, float[] b) {
+	    if (a.length != b.length) return 0;
+
+	    double num = 0, da = 0, db = 0;
+
+	    for (int i = 0; i < a.length; i++) {
+	        num += a[i] * b[i];
+	        da  += a[i] * a[i];
+	        db  += b[i] * b[i];
+	    }
+
+	    double denom = Math.sqrt(da * db);
+	    if (denom == 0) return 0;
+
+	    return num / denom;
+	}
+
+	public static boolean strictMatch(float[] a, float[] b, float tolerance) {
+	    if (a.length != b.length) return false;
+
+	    for (int i = 0; i < a.length - 1; i++) {
+	        float da = a[i+1] - a[i];
+	        float db = b[i+1] - b[i];
+
+	        int sa = Integer.compare(Float.floatToIntBits(da), 0);
+	        int sb = Integer.compare(Float.floatToIntBits(db), 0);
+
+	        // If slopes differ, immediate mismatch
+	        if (sa != sb) return false;
+
+	        // Optional amplitude tolerance
+	        if (Math.abs(da - db) > tolerance)
+	            return false;
+	    }
+
+	    return true; // all slopes aligned
+	}
+
 
 	void loadAudioFrequency() {
         final AudioFormat format = new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, 44100, 16, 1, 2, 44100, false);
@@ -256,21 +382,14 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
         return sample;
     }
 
-	public SmatterWaveMapUI() {
-		initialize();
-	}
-
-	private void initialize() {
-	
-	}
+	public SmatterWaveMapUI() {}
 	
 	private void SWU() {
 		printInit(0);
 		frame = new JFrame("SmatterWaveMap Real-Time RF ⇆ Audio Correlation Engine");
 		frame.setUndecorated(captureGIF);
 		frame.getContentPane().setLayout(null);
-		
-		percentMatch = new JLabel(percentMatchCount+"%");
+		percentMatch = new JLabel(percentMatchCount);
 		percentMatch.setHorizontalAlignment(SwingConstants.CENTER); 
 	    Dimension size= Toolkit.getDefaultToolkit().getScreenSize();
 	    int width = (int)size.getWidth();
@@ -287,10 +406,8 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		btnNewButton.setBounds(100, height/2+10, 200, 30);
 		frame.getContentPane().add(btnNewButton);
 		frame.getContentPane().add(percentMatch);
-		
 		/*percentMatchCount = "90" + "%";
 		percentMatch.setText(percentMatchCount);
- 
 		 Timer timer = new Timer(3000, e -> {
         	 percentMatchCount = "45";
         	 SwingUtilities.invokeLater(new Runnable() {
@@ -303,11 +420,10 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 
 		     ((Timer)e.getSource()).stop();
 		 });
-
 		 timer.start();
 		*/
 		if (captureGIF) {
-			parameterFrequency.setValue(new FrequencyRange(76, 2700));
+			parameterFrequency.setValue(new FrequencyRange(2400, 2500));
 			//parameterFrequency.setValue(new FrequencyRange(2400, 2700));
 			parameterGainTotal.setValue(60);
 			parameterSpurRemoval.setValue(true);
@@ -318,9 +434,7 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		recalculateGains(parameterGainTotal.getValue());
 		try {
 			UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-		} catch (Exception e1) {
-			e1.printStackTrace();
-		}
+		} catch (Exception ignored) {}
 		//		UIManager.getLookAndFeelDefaults().put("TabbedPane.borderHightlightColor", Color.black);
 		//		UIManager.getLookAndFeelDefaults().put("TabbedPane.background", Color.black);
 		//		UIManager.getLookAndFeelDefaults().put("TabbedPane.contentAreaColor", Color.black);
@@ -339,7 +453,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		UIManager.getLookAndFeelDefaults().put("TabbedPane.tabAreaInsets", insets);
 		//		UIManager.getLookAndFeelDefaults().put("", insets);
 		//		UIManager.getLookAndFeelDefaults().put("", insets);
-
 		//		UIManager.getLookAndFeelDefaults().values().forEach((p) -> {
 		//			System.out.println(p.toString());
 		//		});
@@ -366,7 +479,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		parameterDebugDisplay.callObservers();
 		JPanel splitPanePanel	= new JPanel(new BorderLayout());
 		splitPanePanel.add(splitPane, BorderLayout.CENTER);
- 	 
 		printInit(4);
 		setupFrequencyAllocationTable();
 		printInit(5);
@@ -380,9 +492,7 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		if (captureGIF) {
 			try {
 				gifCap = new ScreenCapture(frame, 35 * 1, 10, 5, 760, 660, new File("screenshot.gif"));
-			} catch (Exception e) {
-				e.printStackTrace();
-			}
+			} catch (Exception ignored) {}
 		}
 		JLabel lblNewLabel = new JLabel("");
 		lblNewLabel.setBounds(0, 0, 1366, 768);
@@ -424,11 +534,8 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
         //AudioPlayer player = new AudioPlayer(spectrumPanel);
         AudioPlayerFull player = new AudioPlayerFull(spectrumPanel);
         try {
-			player.play("C:/Users/ParthShahSmatterLLP/Desktop/goodlife.wav");
-		} catch (LineUnavailableException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
+			player.play("C:/Users/ParthShahSmatterLLP/Desktop/setfiretorain.wav");
+		} catch (Exception ignored) {}
         splitPanePanelEA.setBounds(width/20, height/2+(height/16), width-(width/8), (height/2 - height/4));
 		JLabel frequencySpectrumDisplayBackgroud = new JLabel("");
 		frequencySpectrumDisplayBackgroud.setBounds(0, 0, width, height);
@@ -546,12 +653,9 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 	}
 
 	@Override
-	public void newSpectrumData(boolean fullSweepDone, double[] frequencyStart, float fftBinWidthHz,
-			float[] signalPowerdBm) {
-		//		System.out.println(frequencyStart+" "+fftBinWidthHz+" "+signalPowerdBm);
+	public void newSpectrumData(boolean fullSweepDone, double[] frequencyStart, float fftBinWidthHz, float[] signalPowerdBm) {
 		fireHardwareStateChanged(true);
 		if (!hwProcessingQueue.offer(new FFTBins(fullSweepDone, frequencyStart, fftBinWidthHz, signalPowerdBm))) {
-			System.out.println("queue full");
 			dropped++;
 		}
 	}
@@ -566,48 +670,73 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		hRFlisteners.remove(listener);
 	}
 	
-	public static double computeSpectralPatternMatch(double[] magsA, double[] magsB) {
-
-	    int n = magsA.length;
-	    int m = magsB.length;
-        
-	    // DTW matrix
-	    double[][] dtw = new double[n + 1][m + 1];
-
-	    for (int i = 0; i <= n; i++)
-	        Arrays.fill(dtw[i], Double.POSITIVE_INFINITY);
-
-	    dtw[0][0] = 0.0;
-
-	    for (int i = 1; i <= n; i++) {
-	        for (int j = 1; j <= m; j++) {
-
-	            double cost = Math.abs(magsA[i - 1] - magsB[j - 1]);
-
-	            // dynamic time warping recurrence
-	            dtw[i][j] = cost + Math.min(
-	                dtw[i - 1][j],         // insertion
-	                Math.min(
-	                    dtw[i][j - 1],     // deletion
-	                    dtw[i - 1][j - 1]  // match
-	                )
-	            );
-	        }
+	public static double matchPattern(float[] big, float[] small) {
+	    int N = big.length;
+	    int M = small.length;
+	    if (M < 2) return 0;
+	    saveFloatArrayAsText(big, "C:/Users/ParthShahSmatterLLP/Desktop/data.txt");
+	    saveFloatArrayAsText(small, "C:/Users/ParthShahSmatterLLP/Desktop/dataS.txt");
+	    float[] smallRatio = computeRatios(small);
+	    double best = 0;
+	    for (int start = 0; start <= N - M; start++) {
+	        float[] window = Arrays.copyOfRange(big, start, start + M);
+	        float[] winRatio = computeRatios(window);
+	        double score = compareRatios(winRatio, smallRatio);
+	        if (score > best)
+	            best = score;
 	    }
-
-	    // final dtw accumulated deviation
-	    double distance = dtw[n][m];
-
-	    // convert DTW distance -> 0–100 overlay %
-	    double normalization = Math.max(sum(magsA), sum(magsB));
-
-	    double score = 100 * (1 - (distance / normalization));
-	    System.out.println(n + " ** *************************"+score+"******************************** " +m);
-	    return Math.max(0, Math.min(100, score));
+	    return best;
 	}
 
- 
+	public static void saveFloatArrayAsText(float[] array, String filePath) {
+	    try (FileWriter writer = new FileWriter(filePath)) {
+	        for (float value : array) {
+	            writer.write(value + ",");
+	        }
+	    } catch (IOException e) {
+	        e.printStackTrace();
+	    }
+	}
+	
+	/*private static float[] computeRatios(float[] arr) {
+	    float[] r = new float[arr.length - 1];
+	    for (int i = 0; i < r.length; i++) {
+	        float a = arr[i];
+	        float b = arr[i + 1];
+	        if (a == 0) a = 0.0001f;
+	        r[i] = b / a;
+	    }
+	    return r;
+	}*/
 
+	/*private static double compareRatios(float[] a, float[] b) {
+	    double score = 0;
+	    for (int i = 0; i < a.length; i++) {
+	        double diff = Math.abs(a[i] - b[i]);
+	        score += 1.0 / (1.0 + diff);
+	    }
+	    return (score / a.length) * 100.0; // % match
+	}*/
+
+	public static double computeSpectralPatternMatch(double[] magsA, double[] magsB) {
+	    int n = magsA.length;
+	    int m = magsB.length;
+	    double[][] dtw = new double[n + 1][m + 1];
+	    for (int i = 0; i <= n; i++){
+	    	Arrays.fill(dtw[i], Double.POSITIVE_INFINITY);
+	    }
+	    dtw[0][0] = 0.0;
+	    for (int i = 1; i <= n; i++) {
+	        for (int j = 1; j <= m; j++) {
+	            double cost = Math.abs(magsA[i - 1] - magsB[j - 1]);
+	            dtw[i][j] = cost + Math.min(dtw[i - 1][j], Math.min(dtw[i][j - 1], dtw[i - 1][j - 1]));
+	        }
+	    }
+	    double distance = dtw[n][m];
+	    double normalization = Math.max(sum(magsA), sum(magsB));
+	    double score = 100 * (1 - (distance / normalization));
+	    return Math.max(0, Math.min(100, score));
+	}
 
 	private static double sum(double[] arr) {
 	    double s = 0;
@@ -625,34 +754,24 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 	 * @return overlay match percentage (0–100)
 	 */
 	public static double computeSpectrumOverlayPercent(double[] fftA, double[] fftB) {
-
 	    int len = Math.min(fftA.length, fftB.length);
-
 	    double dot = 0;
 	    double magA = 0;
 	    double magB = 0;
-
 	    for (int i = 0; i < len; i++) {
-
 	        double a = fftA[i];
 	        double b = fftB[i];
-
 	        dot += a * b;
 	        magA += a * a;
 	        magB += b * b;
 	    }
-
 	    if (magA == 0 || magB == 0)
 	        return 0.0;
-
 	    double cosine = dot / (Math.sqrt(magA) * Math.sqrt(magB));
-
 	    // Clamp numerical drift
 	    cosine = Math.max(-1, Math.min(1, cosine));
-
 	    return (cosine * 100.0);
 	}
-	
 	/**
 	 * Computes overlay match between audio FFT magnitudes and DatasetSpectrum power bins.
 	 * Uses cosine similarity (best spectral similarity metric).
@@ -983,32 +1102,25 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 	private void setupChart() {
 		int axisWidthLeft = 100;
 		int axisWidthRight = 20;
-
         chart = ChartFactory.createXYLineChart("Spectrum analyzer Real-Time RF", "Frequency [MHz]", "Power [dB]", chartDataset,
 				PlotOrientation.VERTICAL, false, false, false);
 		chart.getRenderingHints().put(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-
 		XYPlot plot = chart.getXYPlot();
 		NumberAxis domainAxis = ((NumberAxis) plot.getDomainAxis());
 		NumberAxis rangeAxis = ((NumberAxis) plot.getRangeAxis());
 		chartLineRenderer = new XYLineAndShapeRenderer();
 		chartLineRenderer.setDefaultShapesVisible(false);
 		chartLineRenderer.setDefaultStroke(new BasicStroke(parameterSpectrumLineThickness.getValue().floatValue()));
-
 		rangeAxis.setAutoRange(false);
 		rangeAxis.setRange(-110, 20);
 		rangeAxis.setTickUnit(new NumberTickUnit(10, new DecimalFormat("###")));
-
 		domainAxis.setNumberFormatOverride(new DecimalFormat(" #.### "));
-
 		chartLineRenderer.setAutoPopulateSeriesStroke(false);
 		chartLineRenderer.setAutoPopulateSeriesPaint(false);
 		chartLineRenderer.setSeriesPaint(0, colors.palette2);
-
 		if (false)
 			chart.addProgressListener(new ChartProgressListener() {
 				StandardTickUnitSource tus = new StandardTickUnitSource();
-
 				@Override
 				public void chartProgress(ChartProgressEvent event) {
 					if (event.getType() == ChartProgressEvent.DRAWING_STARTED) {
@@ -1016,14 +1128,11 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 						domainAxis.setTickUnit((NumberTickUnit) tus.getCeilingTickUnit(r.getLength() / 20));
 						domainAxis.setMinorTickCount(2);
 						domainAxis.setMinorTickMarksVisible(true);
-
 					}
 				}
 			});
-
 		plot.setDomainGridlinesVisible(false);
 		plot.setRenderer(chartLineRenderer);
-
 		/**
 		 * sets empty space around the plot
 		 */
@@ -1034,12 +1143,9 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		axisSpace.setBottom(50);
 		plot.setFixedDomainAxisSpace(axisSpace);//sets width of the domain axis left/right
 		plot.setFixedRangeAxisSpace(axisSpace);//sets heigth of range axis top/bottom
-
 		rangeAxis.setAxisLineVisible(false);
 		rangeAxis.setTickMarksVisible(false);
-
 		plot.setAxisOffset(RectangleInsets.ZERO_INSETS); //no space between range axis and plot
-
 		Font labelFont = new Font(Font.MONOSPACED, Font.BOLD, 16);
 		//rangeAxis.setLabelFont(labelFont);
 		//rangeAxis.setTickLabelFont(labelFont);
@@ -1053,7 +1159,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		//plot.setBackgroundPaint(colors.palette4);
 		//chart.setBackgroundPaint(colors.palette4);
 		chartLineRenderer.setSeriesPaint(1, colors.palette1);
-
 		chartPanel = new ChartPanel(chart);
 		chartPanel.setMaximumDrawWidth(4096);
 		//chartPanel.setMaximumDrawHeight(2160);
@@ -1062,17 +1167,13 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		chartPanel.setRangeZoomable(false);
 		chartPanel.setPopupMenu(null);
 		chartPanel.setMinimumSize(new Dimension(200, 4096));
-
 		printInit(1);
-
-	 
 	}
 
 	/**
 	 * Displays a cross marker with current frequency and signal strength when
 	 * mouse hovers over the frequency chart
 	 */
- 
 
 	private void setupFrequencyAllocationTable() {
 		SwingUtilities.invokeLater(() -> {
@@ -1101,7 +1202,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		parameterFFTBinHz.addListener(restartHackrf);
 		parameterSamples.addListener(restartHackrf);
 		parameterIsCapturingPaused.addListener(this::fireCapturingStateChanged);
-
 		parameterGainTotal.addListener((gainTotal) -> {
 			if (flagManualGain) //flag is being adjusted manually by LNA or VGA, do not recalculate the gains
 				return;
@@ -1122,7 +1222,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		};
 		parameterGainLNA.addListener(gainRecalc);
 		parameterGainVGA.addListener(gainRecalc);
-
 		parameterSpurRemoval.addListener(() -> {
 			SpurFilter filter = spurFilter;
 			if (filter != null) {
@@ -1167,9 +1266,7 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		parameterPersistentDisplayPersTime.addListener((time) -> {
 			persistentDisplay.setPersistenceTime(time);
 		});
-
 		int persistentDisplayDownscaleFactor = 4;
-
 		Runnable resetPersistentImage = () -> {
 			boolean display = parameterPersistentDisplay.getValue();
 			persistentDisplay.reset();
@@ -1180,7 +1277,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 			if (parameterPersistentDisplay.getValue())
 				chart.getXYPlot().setBackgroundImage(image);
 		});
-
 		registerListener(new HackRFEventAdapter() {
 			@Override
 			public void hardwareStatusChanged(boolean hardwareSendingData) {
@@ -1191,11 +1287,9 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 				});
 			}
 		});
-
 		parameterPersistentDisplay.addListener((display) -> {
 			SwingUtilities.invokeLater(resetPersistentImage::run);
 		});
-
 		chartDataArea.addListener((area) -> {
 			SwingUtilities.invokeLater(() -> {
 				/*
@@ -1203,7 +1297,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 				 */
 				/**if (waterfallPlot != null)
 					waterfallPlot.setDrawingOffsets((int) area.getX(), (int) area.getWidth());*/
-
 				/**
 				 * persistent display config
 				 */
@@ -1231,7 +1324,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		});
 		threadLauncher.start();
 	}
-
 	/**
 	 * no need to synchronize, executes only in launcher thread
 	 */
@@ -1275,7 +1367,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 				processingThread();
 			});
 			threadProcessing.start();
-
 			/**
 			 * Ensures auto-restart if HW disconnects
 			 */
@@ -1294,14 +1385,11 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 					Thread.sleep(1000);
 				}
 			}
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-		} finally {
+		} catch (Exception ignored) {} finally {
 			lock.unlock();
 			fireHardwareStateChanged(false);
 		}
 	}
-
 	protected void redrawFrequencySpectrumTable() {
 		Rectangle2D area = chartPanel.getChartRenderingInfo().getPlotInfo().getDataArea();
 		FrequencyAllocationTable activeTable = parameterFrequencyAllocationTable.getValue();
@@ -1348,7 +1436,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 		PerformanceEntry waterfallDraw	= new PerformanceEntry("Wtrfll.drw");
 		PerformanceEntry chartDrawing	= new PerformanceEntry("Spectr.chart");
 		PerformanceEntry spurFilter = new PerformanceEntry("Spur.fil");
-		
 		private ArrayList<PerformanceEntry> entries	= new ArrayList<>();
 		public RuntimePerformanceWatch() {
 			entries.add(persisentDisplay);
@@ -1357,7 +1444,6 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 			entries.add(chartDrawing);
 			entries.add(spurFilter);
 		}
-		
 		public synchronized String generateStatistics() {
 			long timeElapsed = System.currentTimeMillis() - lastStatisticsRefreshed;
 			if (timeElapsed <= 0)
@@ -1373,8 +1459,7 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 			return b.toString();
 //			double timeSpentDrawingChartPerSec = chartDrawingSum / (timeElapsed / 1000d) / 1000d;
 //			return String.format("Spectrum refreshes: %d / Chart redraws: %d / Drawing time in 1 sec %.2fs",
-//					hwFullSpectrumRefreshes, chartRedrawed, timeSpentDrawingChartPerSec);
-
+//			hwFullSpectrumRefreshes, chartRedrawed, timeSpentDrawingChartPerSec);
 		}
 
 		public synchronized void reset() {
@@ -1385,6 +1470,5 @@ public class SmatterWaveMapUI implements HackRFSettings, HackRFSweepDataCallback
 			lastStatisticsRefreshed = System.currentTimeMillis();
 		}
 	}
-
 }
 

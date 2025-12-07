@@ -26,6 +26,7 @@ public class SpectrumPanel extends JPanel {
     private final int BAR_WIDTH = 4;        
     public static DatasetSpectrum ds;
     public static AudioPlayerFull a;
+    public static DatasetSpectrum uData;
     
     public SpectrumPanel() {
         setPreferredSize(new Dimension(800, 200));
@@ -37,24 +38,18 @@ public class SpectrumPanel extends JPanel {
      */
     public void updateSpectrum(double[] magnitudes) {
         this.spectrum = Arrays.copyOf(magnitudes, magnitudes.length);
-        ds.spectrumC = magnitudes;
-        
-        // FFT bin size, start MHz, stop MHz, initial value
-        Thread asyncThread = new Thread(new MyRunnable());
-        asyncThread.start(); // Starts the asynchronous execution
-        System.out.println("Main thread continues execution.");
+        ds.spectrumC = toFloatArray(magnitudes); 
         SwingUtilities.invokeLater(this::repaint);
     }
     
-    class MyRunnable implements Runnable {
-        @Override
-        public void run() {
-        	SmatterWaveMapUI S=new SmatterWaveMapUI();
-        	S.updatedPCount = S.computeSpectralPatternMatch(a.mags, ds.spectrumC);
+    public static float[] toFloatArray(double[] arr) {
+        float[] out = new float[arr.length];
+        for (int i = 0; i < arr.length; i++) {
+            out[i] = (float) arr[i];
         }
+        return out;
     }
 
-    
 
     @Override
     protected void paintComponent(Graphics g) {
