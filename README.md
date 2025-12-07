@@ -46,7 +46,7 @@ The project is built for **researchers, engineers, and signal-processing experts
 ### **Clone + Build (Maven)**
 
 ```bash
-git clone https://github.com/<org>/SmatterWaveMap.git
+git clone https://github.com/shahparth1111/SmatterWaveMap.git
 cd smatterwavemap
 mvn clean package
 ```
