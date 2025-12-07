@@ -30,13 +30,13 @@ The project is built for **researchers, engineers, and signal-processing experts
 
 ```
 /smatterwavemap-java
-├── core/        # FFT, filtering, feature extraction
-├── audio/       # decoding + STFT/MFCC engine
-├── device/      # HackRF/SoapySDR integration
-├── correlator/  # NCC + DTW engine
-├── gui/         # JavaFX visual views (optional)
-├── cli/         # command-line tools
-└── api/         # high-level Java API
+├── hackrfsweep/      
+├── jspectrumanalyzer/    
+├── jspectrumanalyzer.capture/     
+├── jspectrumanalyzer.core/  
+├── jspectrumanalyzer.core.jfc/     
+├── jspectrumanalyzer.nativebridge/      
+└── jspectrumanalyzer.ui/       
 ```
 
 ---
